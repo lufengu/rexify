@@ -1,183 +1,331 @@
+import 'dart:io';
+import 'dart:convert';
+import 'dart:typed_data';
+import 'dart:async'; // <-- añadido
+import 'package:audio_session/audio_session.dart';
 import 'package:just_audio/just_audio.dart';
+import 'package:audio_service/audio_service.dart';
 import 'package:on_audio_query/on_audio_query.dart';
-import 'dart:math';
+import 'package:hive/hive.dart';
+import 'package:path_provider/path_provider.dart';
+import '../main.dart';
 
 class AudioPlayerService {
+  // Singleton para evitar múltiples reproductores
   static final AudioPlayerService _instance = AudioPlayerService._internal();
   factory AudioPlayerService() => _instance;
-  AudioPlayerService._internal();
+  AudioPlayerService._internal() {
+    // Lanzamos la inicialización asincrónica y guardamos el Future para poder esperarlo desde fuera.
+    _initFuture = _init();
+  }
 
-  final AudioPlayer _audioPlayer = AudioPlayer();
+  final AudioPlayer _player = AudioPlayer();
   final OnAudioQuery _audioQuery = OnAudioQuery();
 
-  List<SongModel> _playlist = [];
-  List<SongModel> _originalPlaylist = [];
-  int _currentIndex = 0;
+  // Playlist de archivos (descargas locales sueltas)
+  List<String> _filePlaylist = [];
+  int _fileIndex = -1;
+  String? _currentPath;
+
+  // Playlist basada en SongModel (biblioteca de música del dispositivo)
+  List<SongModel> _songPlaylist = [];
+  List<SongModel> _originalSongPlaylist = [];
+  int _songIndex = -1;
+
+  // Estado de modos
   bool _isShuffleEnabled = false;
   LoopMode _loopMode = LoopMode.off;
 
-  // Getters
-  AudioPlayer get audioPlayer => _audioPlayer;
+  // Streams y getters que usa la UI
+  bool get isPlaying => _player.playing;
+  AudioPlayer get audioPlayer => _player;
   OnAudioQuery get audioQuery => _audioQuery;
-  List<SongModel> get playlist => _playlist;
-  int get currentIndex => _currentIndex;
-  SongModel? get currentSong =>
-      _playlist.isEmpty ? null : _playlist[_currentIndex];
+  Stream<Duration?> get durationStream => _player.durationStream;
+  Stream<Duration> get positionStream => _player.positionStream;
+  Stream<PlayerState> get playerStateStream => _player.playerStateStream;
+  PlayerState get playerState => _player.playerState;
   bool get isShuffleEnabled => _isShuffleEnabled;
   LoopMode get loopMode => _loopMode;
+  // Accesores de canción actual (SongModel) y archivo actual (path)
+  SongModel? get currentSong => _songPlaylist.isEmpty || _songIndex < 0 ? null : _songPlaylist[_songIndex];
+  int get currentSongIndex => _songIndex;
+  String? get currentPath => _currentPath;
+  int get currentFileIndex => _fileIndex;
+  List<String> get filePlaylist => List.unmodifiable(_filePlaylist);
 
-  Stream<Duration> get positionStream => _audioPlayer.positionStream;
-  Stream<Duration?> get durationStream => _audioPlayer.durationStream;
-  Stream<PlayerState> get playerStateStream => _audioPlayer.playerStateStream;
-  Stream<ProcessingState> get processingStateStream =>
-      _audioPlayer.processingStateStream;
-  Stream<LoopMode> get loopModeStream => _audioPlayer.loopModeStream;
+  Box? _stateBox; // Hive para persistencia de última pista y posición
+  DateTime _lastPersist = DateTime.fromMillisecondsSinceEpoch(0);
+  Future<void>? _initFuture; // Permite exponer init() público y evitar doble init.
 
-  bool get isPlaying => _audioPlayer.playing;
-  Duration get position => _audioPlayer.position;
-  Duration? get duration => _audioPlayer.duration;
+  /// Método público para inicializar el servicio y poder hacer `await` en `main.dart`.
+  /// Si ya se está inicializando o terminó, simplemente retorna el mismo Future.
+  Future<void> init() {
+    return _initFuture ??= _init();
+  }
 
-  // Initialize service
-  Future<void> init() async {
-    // Setup audio session for background playback
-    _audioPlayer.setLoopMode(LoopMode.off);
+  Future<void> _init() async {
+    try {
+      final session = await AudioSession.instance;
+      await session.configure(const AudioSessionConfiguration.music());
+    } catch (_) {}
+    // Abrir box Hive para estado persistente
+    try { _stateBox = await Hive.openBox('player_state'); } catch (_) {}
 
-    // Listen to player completion to play next song
-    _audioPlayer.processingStateStream.listen((state) {
-      if (state == ProcessingState.completed) {
-        playNext();
+    // Restaurar última pista si existe
+    try {
+      final lastPath = _stateBox?.get('last_path') as String?;
+      final lastPosMs = _stateBox?.get('last_position_ms') as int?;
+      if (lastPath != null && File(lastPath).existsSync()) {
+        _currentPath = lastPath;
+        _filePlaylist = [lastPath];
+        _fileIndex = 0;
+        try {
+          await _player.setAudioSource(AudioSource.uri(Uri.file(lastPath)));
+          if (lastPosMs != null && lastPosMs > 0) {
+            await _player.seek(Duration(milliseconds: lastPosMs));
+          }
+          // MediaItem inicial (no autoplay)
+          final media = MediaItem(
+            id: lastPath,
+            album: '',
+            title: lastPath.split(Platform.pathSeparator).last,
+            artUri: await _placeholderArtUri('resume'),
+            extras: {'path': lastPath, 'resumed': true},
+          );
+          await audioHandler.updateMediaItem(media);
+        } catch (_) {}
       }
+    } catch (_) {}
+
+    // Escuchar cambio de posición para persistir (throttle cada 5s)
+    _player.positionStream.listen((pos) {
+      if (_currentPath == null) return;
+      if (!_player.playing) return; // guardar sólo mientras reproduce
+      final now = DateTime.now();
+      if (now.difference(_lastPersist) < const Duration(seconds: 5)) return;
+      _lastPersist = now;
+      try {
+        _stateBox?.put('last_path', _currentPath);
+        _stateBox?.put('last_position_ms', pos.inMilliseconds);
+      } catch (_) {}
+    });
+
+    // Procesamiento adicional
+    _player.processingStateStream.listen((state) {
+      // Auto-advance cuando una pista termina.
+      try {
+        if (state == ProcessingState.completed) {
+          // Si hay una playlist de archivos, avanzar por ella (descargas/locales).
+          if (_filePlaylist.isNotEmpty) {
+            unawaited(playNextInFilePlaylist());
+            return;
+          }
+          // Si hay una playlist de SongModel (biblioteca), usar playNext().
+          if (_songPlaylist.isNotEmpty) {
+            unawaited(playNext());
+            return;
+          }
+          // Si no hay playlists, simplemente detener el player.
+          try {
+            _player.stop();
+          } catch (_) {}
+        }
+      } catch (_) {}
     });
   }
 
-  // Load all songs from device
+  Future<void> play() => _player.play();
+  Future<void> pause() => _player.pause();
+  Future<void> stop() => _player.stop();
+
+  Future<void> setVolume(double v) => _player.setVolume(v);
+
+  Future<void> seek(Duration position) async {
+    try {
+      await _player.seek(position);
+    } catch (_) {}
+  }
+
+  /// Reproduce un archivo local (descarga). Evita reiniciar si ya está reproduciéndose la misma ruta.
+  /// Genera MediaItem con posible artwork (placeholder si no hay).
+  Future<void> playFile(File file, {String? title, String? artist}) async {
+    final path = file.path;
+    // Si la misma pista está sonando, no la reiniciamos
+    if (_currentPath != null && _currentPath == path) {
+      if (_player.playing) return; // ya reproducida
+      // si está pausada, simplemente reanudar
+      if (_player.processingState == ProcessingState.ready || _player.processingState == ProcessingState.completed) {
+        await _player.play();
+        return;
+      }
+    }
+
+    _currentPath = path;
+    // Actualizar índice en playlist de archivos si existe
+    final idx = _filePlaylist.indexOf(path);
+    if (idx >= 0) {
+      _fileIndex = idx;
+    } else {
+      _filePlaylist.add(path);
+      _fileIndex = _filePlaylist.length - 1;
+    }
+    try {
+      await _player.setFilePath(path);
+      await _player.play();
+      // Persistir inicio de nueva pista
+      try {
+        _stateBox?.put('last_path', path);
+        _stateBox?.put('last_position_ms', 0);
+      } catch (_) {}
+      // Artwork placeholder (no metadata para archivos sueltos)
+      Uri? art = await _placeholderArtUri(path);
+      // Push MediaItem para notificación persistente
+      try {
+        final media = MediaItem(
+          id: path,
+          album: '',
+          title: title ?? path.split(Platform.pathSeparator).last,
+          artist: artist,
+          duration: _player.duration,
+          artUri: art,
+          extras: {'path': path},
+        );
+        await audioHandler.updateMediaItem(media);
+      } catch (_) {}
+    } catch (e) {
+      rethrow;
+    }
+  }
+
+  /// Establece una playlist de archivos y reproduce el índice inicial.
+  Future<void> setFilePlaylistAndPlay(List<String> paths, int startIndex) async {
+    if (paths.isEmpty) return;
+    _filePlaylist = List.of(paths);
+    _fileIndex = startIndex.clamp(0, _filePlaylist.length - 1);
+    await playFile(File(_filePlaylist[_fileIndex]));
+  }
+
+  Future<void> playNextInFilePlaylist() async {
+    if (_filePlaylist.isEmpty) return;
+    _fileIndex = (_fileIndex + 1) % _filePlaylist.length;
+    await playFile(File(_filePlaylist[_fileIndex]));
+  }
+
+  Future<void> playPreviousInFilePlaylist() async {
+    if (_filePlaylist.isEmpty) return;
+    _fileIndex = (_fileIndex - 1 + _filePlaylist.length) % _filePlaylist.length;
+    await playFile(File(_filePlaylist[_fileIndex]));
+  }
+
+  // -------- Canciones (SongModel) --------
   Future<List<SongModel>> loadSongs() async {
     try {
-      _playlist = await _audioQuery.querySongs(
+      _songPlaylist = await _audioQuery.querySongs(
         sortType: SongSortType.TITLE,
         orderType: OrderType.ASC_OR_SMALLER,
         uriType: UriType.EXTERNAL,
         ignoreCase: true,
       );
-      _originalPlaylist = List.from(_playlist);
-      return _playlist;
+      _originalSongPlaylist = List.from(_songPlaylist);
+      return _songPlaylist;
     } catch (e) {
+      // ignore: avoid_print
       print('Error loading songs: $e');
       return [];
     }
   }
 
-  // Play a song
   Future<void> playSong(SongModel song, int index) async {
     try {
-      _currentIndex = index;
-      await _audioPlayer.setAudioSource(AudioSource.uri(Uri.parse(song.uri!)));
-      await _audioPlayer.play();
+      final current = currentSong;
+      if (current != null && current.id == song.id) {
+        if (_player.playing) return; // evitar reinicio
+        await _player.play();
+        return;
+      }
+      _songIndex = index;
+      final uri = song.uri ?? song.data;
+      await _player.setAudioSource(AudioSource.uri(Uri.parse(uri)));
+      await _player.play();
+      // Persistir pista
+      try {
+        _stateBox?.put('last_path', song.data);
+        _stateBox?.put('last_position_ms', 0);
+      } catch (_) {}
+      // Actualizar MediaItem para notificación
+      try {
+        Uint8List? artworkBytes;
+        try { artworkBytes = await _audioQuery.queryArtwork(song.id, ArtworkType.AUDIO); } catch (_) {}
+        Uri? artUri;
+        if (artworkBytes != null && artworkBytes.isNotEmpty) {
+          artUri = await _writeArtworkBytes(artworkBytes, 'song_${song.id}');
+        } else {
+          artUri = await _placeholderArtUri('song_${song.id}');
+        }
+        final media = MediaItem(
+          id: song.id.toString(),
+          album: song.album ?? '',
+          title: song.title,
+          artist: song.artist,
+          duration: song.duration != null ? Duration(milliseconds: song.duration!) : null,
+          artUri: artUri,
+          extras: {'path': song.data},
+        );
+        await audioHandler.updateMediaItem(media);
+      } catch (_) {}
     } catch (e) {
+      // ignore: avoid_print
       print('Error playing song: $e');
     }
   }
 
-  // Play/Pause toggle
-  Future<void> togglePlayPause() async {
-    if (_audioPlayer.playing) {
-      await _audioPlayer.pause();
-    } else {
-      await _audioPlayer.play();
-    }
-  }
-
-  // Play next song
   Future<void> playNext() async {
-    if (_playlist.isEmpty) return;
-
-    _currentIndex = (_currentIndex + 1) % _playlist.length;
-    await playSong(_playlist[_currentIndex], _currentIndex);
+    if (_songPlaylist.isNotEmpty) {
+      _songIndex = (_songIndex + 1) % _songPlaylist.length;
+      await playSong(_songPlaylist[_songIndex], _songIndex);
+    } else {
+      await playNextInFilePlaylist();
+    }
   }
 
-  // Play previous song
   Future<void> playPrevious() async {
-    if (_playlist.isEmpty) return;
-
-    if (_audioPlayer.position.inSeconds > 3) {
-      // If more than 3 seconds, restart current song
-      await _audioPlayer.seek(Duration.zero);
-    } else {
-      // Otherwise go to previous song
-      _currentIndex = (_currentIndex - 1 + _playlist.length) % _playlist.length;
-      await playSong(_playlist[_currentIndex], _currentIndex);
-    }
-  }
-
-  // Seek to position
-  Future<void> seek(Duration position) async {
-    await _audioPlayer.seek(position);
-  }
-
-  // Set volume (0.0 to 1.0)
-  Future<void> setVolume(double volume) async {
-    await _audioPlayer.setVolume(volume);
-  }
-
-  // Stop playback
-  Future<void> stop() async {
-    await _audioPlayer.stop();
-  }
-
-  // Toggle shuffle mode
-  Future<void> toggleShuffle() async {
-    _isShuffleEnabled = !_isShuffleEnabled;
-
-    if (_isShuffleEnabled) {
-      // Save current song
-      final currentSong = _playlist[_currentIndex];
-
-      // Shuffle playlist
-      final random = Random();
-      _playlist.shuffle(random);
-
-      // Move current song to the beginning
-      final newIndex = _playlist.indexOf(currentSong);
-      if (newIndex != -1 && newIndex != 0) {
-        final temp = _playlist[0];
-        _playlist[0] = currentSong;
-        _playlist[newIndex] = temp;
+    if (_songPlaylist.isNotEmpty) {
+      if (_player.position.inSeconds > 3) {
+        await _player.seek(Duration.zero);
+        return;
       }
-      _currentIndex = 0;
+      _songIndex = (_songIndex - 1 + _songPlaylist.length) % _songPlaylist.length;
+      await playSong(_songPlaylist[_songIndex], _songIndex);
     } else {
-      // Restore original order
-      final currentSong = _playlist[_currentIndex];
-      _playlist = List.from(_originalPlaylist);
-      _currentIndex = _playlist.indexOf(currentSong);
-      if (_currentIndex == -1) _currentIndex = 0;
+      await playPreviousInFilePlaylist();
     }
   }
 
-  // Toggle loop mode (off -> all -> one -> off)
+  Future<void> togglePlayPause() async {
+    if (_player.playing) {
+      await _player.pause();
+    } else {
+      await _player.play();
+    }
+  }
+
   Future<void> toggleLoopMode() async {
     switch (_loopMode) {
       case LoopMode.off:
         _loopMode = LoopMode.all;
-        await _audioPlayer.setLoopMode(LoopMode.all);
+        await _player.setLoopMode(LoopMode.all);
         break;
       case LoopMode.all:
         _loopMode = LoopMode.one;
-        await _audioPlayer.setLoopMode(LoopMode.one);
+        await _player.setLoopMode(LoopMode.one);
         break;
       case LoopMode.one:
         _loopMode = LoopMode.off;
-        await _audioPlayer.setLoopMode(LoopMode.off);
+        await _player.setLoopMode(LoopMode.off);
         break;
     }
   }
 
-  // Set loop mode directly
-  Future<void> setLoopMode(LoopMode mode) async {
-    _loopMode = mode;
-    await _audioPlayer.setLoopMode(mode);
-  }
-
-  // Get loop mode icon
   String getLoopModeText() {
     switch (_loopMode) {
       case LoopMode.off:
@@ -189,8 +337,64 @@ class AudioPlayerService {
     }
   }
 
-  // Dispose
-  void dispose() {
-    _audioPlayer.dispose();
+  Future<void> setLoopMode(LoopMode mode) async {
+    _loopMode = mode;
+    try { await _player.setLoopMode(mode); } catch (_) {}
+  }
+
+  Future<void> toggleShuffle() async {
+    _isShuffleEnabled = !_isShuffleEnabled;
+    try { await _player.setShuffleModeEnabled(_isShuffleEnabled); } catch (_) {}
+    // Si la playlist principal es SongModel, barajar manteniendo la canción actual al inicio
+    if (_songPlaylist.isNotEmpty) {
+      final current = currentSong;
+      if (current == null) return;
+      if (_isShuffleEnabled) {
+        final rand = _songPlaylist.toList();
+        rand.shuffle();
+        // mover canción actual al índice 0
+        final idx = rand.indexWhere((s) => s.id == current.id);
+        if (idx > 0) {
+          final tmp = rand[0];
+          rand[0] = current;
+          rand[idx] = tmp;
+        }
+        _songPlaylist = rand;
+        _songIndex = 0;
+      } else {
+        // restaurar orden original ubicando la actual
+        final idx = _originalSongPlaylist.indexWhere((s) => s.id == current.id);
+        _songPlaylist = List.from(_originalSongPlaylist);
+        _songIndex = idx >= 0 ? idx : 0;
+      }
+    }
+  }
+
+  Future<void> dispose() async {
+    await _player.dispose();
+  }
+
+  // ---------------- Artwork Helpers ----------------
+  Future<Uri?> _placeholderArtUri(String id) async {
+    try {
+      final dir = await getTemporaryDirectory();
+      final f = File('${dir.path}/rexify_art_placeholder_$id.png');
+      if (!await f.exists()) {
+        // PNG 1x1 transparente (base64)
+        const b64 = 'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR4nGMAAQAABQABDQottAAAAABJRU5ErkJggg==';
+        final bytes = base64Decode(b64);
+        await f.writeAsBytes(bytes, flush: true);
+      }
+      return Uri.file(f.path);
+    } catch (_) { return null; }
+  }
+
+  Future<Uri?> _writeArtworkBytes(Uint8List bytes, String id) async {
+    try {
+      final dir = await getTemporaryDirectory();
+      final f = File('${dir.path}/rexify_art_$id.png');
+      await f.writeAsBytes(bytes, flush: true);
+      return Uri.file(f.path);
+    } catch (_) { return null; }
   }
 }

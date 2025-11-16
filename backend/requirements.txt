@@ -1,0 +1,12 @@
+flask==3.0.3
+flask-cors==4.0.0
+# FastAPI stack para backend concurrente
+fastapi==0.115.5
+uvicorn[standard]==0.32.0
+python-dotenv==1.0.1
+
+# Fijada a una versión estable disponible en PyPI (según lista de tu salida)
+yt-dlp==2024.10.7
+
+# Añadido: API alternativa (y2mate)
+y2mate-api>=0.1.0

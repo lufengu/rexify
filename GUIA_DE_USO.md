@@ -132,4 +132,39 @@ Para cambiar entre modos:
 - Al menos 50 MB de espacio libre
 - Archivos de audio en formatos: MP3, WAV, M4A, AAC, FLAC
 
+## 🔍 Búsqueda y descarga desde YouTube (beta)
+
+La app incluye una pantalla para buscar música en YouTube y descargar directamente el audio en MP3 sin almacenarlo en el servidor.
+
+### Cómo usarlo
+1. En la pantalla principal toca el botón con el ícono de globo terráqueo (🌐).
+2. Ingresa el nombre de la canción o artista en el campo de texto superior.
+3. Pulsa el botón de búsqueda (lupa) para cargar resultados dentro del WebView.
+4. Pulsa el botón "MP3" para solicitar la conversión y descarga.
+5. Al finalizar verás una notificación tipo SnackBar con la opción "Reproducir".
+6. El archivo se guarda en el directorio temporal de la app (puede limpiarse automáticamente por el sistema). Próximamente opción para guardarlo de forma persistente.
+
+### Consideraciones técnicas
+| Aspecto | Detalle |
+|---------|---------|
+| Backend | Flask + yt-dlp + ffmpeg (transcodificación en streaming) |
+| Protocolo | Petición GET a /download?q=TU_TERMINO |
+| Formato salida | MP3 192 kbps |
+| Almacenamiento servidor | Ninguno (stream en tiempo real) |
+| Limitaciones | Calidad sujeta a fuente original; requiere conexión estable |
+
+### Errores comunes
+| Mensaje | Causa | Solución |
+|---------|-------|----------|
+| ffmpeg not found | ffmpeg no instalado en máquina donde corre backend | Instalar paquete ffmpeg (según SO) |
+| No results found | yt-dlp no encontró coincidencias | Intenta término más específico |
+| 500 No downloadable formats | Video sin formatos de audio disponibles | Prueba otra canción |
+
+### Seguridad y uso responsable
+Esta función está pensada para uso personal y educativo. Respeta los derechos de autor y términos de servicio de las plataformas donde realizas búsquedas.
+
+### Extensibilidad planeada
+En el futuro se podrán agregar otras fuentes (p.ej. SoundCloud, Jamendo) manteniendo la misma interfaz de descarga.
+
+
 
