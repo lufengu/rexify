@@ -25,7 +25,9 @@ android {
         // You can update the following values to match your application needs.
         // For more information, see: https://flutter.dev/to/review-gradle-config.
         minSdk = flutter.minSdkVersion
-        targetSdk = flutter.targetSdkVersion
+        // Forzar targetSdk explícito para controlar comportamiento de permisos en dispositivos Android 10/11.
+        // Ajusta este valor según tus pruebas (por ejemplo 29, 30, 33).
+        targetSdk = 33
         versionCode = flutter.versionCode
         versionName = flutter.versionName
     }

@@ -1,3 +1,61 @@
+# Flutter/Dart
+.dart_tool/
+.flutter-plugins
+.flutter-plugins-dependencies
+.packages
+build/
+ios/Flutter/Flutter.framework/
+ios/Flutter/Flutter.podspec
+ios/Flutter/App.framework
+ios/Flutter/Generated.xcconfig
+ios/Flutter/ephemeral/
+macos/Flutter/ephemeral/
+android/.gradle/
+android/local.properties
+android/app/build/
+android/build/
+web/.dart_tool/
+
+# VS Code
+.vscode/
+
+# Logs
+*.log
+
+# Env/Secrets
+.env
+.env.*
+**/.env
+**/.env.*
+
+# Python virtualenvs
+.venv/
+.venv_*/
+**/.venv/
+**/.venv_*/
+.venv_y2/
+backend/.venv/
+
+# Python cache
+__pycache__/
+**/__pycache__/
+*.pyc
+
+# Android/Gradle wrappers outputs
+gradle/
+.gradle/
+
+# Generated plugin registrants
+linux/flutter/generated*
+macos/Flutter/Generated*
+windows/flutter/generated*
+
+# Binaries and media test artifacts
+*.mp3
+*.mp4
+*.apk
+*.aab
+*.ipa
 # Miscellaneous
 *.class
 *.log

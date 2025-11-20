@@ -1,12 +1,17 @@
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
+import 'dart:io';
 import 'package:hive_flutter/hive_flutter.dart';
 import 'package:audio_service/audio_service.dart';
+import 'package:flutter_localizations/flutter_localizations.dart';
+import 'package:intl/intl.dart';
+import 'package:intl/date_symbol_data_local.dart';
 import 'services/audio_player_service.dart';
 import 'services/audio_handler.dart';
 import 'package:flutter_downloader/flutter_downloader.dart';
 import 'services/download_manager.dart';
 import 'screens/root_dashboard.dart';
+import 'services/permission_utils.dart';
 
 late AudioHandler audioHandler; // tipo general (evita error de asignación)
 
@@ -36,6 +41,15 @@ void main() async {
 
   // Initialize Hive
   await Hive.initFlutter();
+
+  // Inicializar datos de localización para Intl (fechas, etc.)
+  try {
+    await initializeDateFormatting('es');
+    Intl.defaultLocale = 'es';
+  } catch (e) {
+    // ignore: avoid_print
+    print('No se pudo inicializar Intl/es: $e');
+  }
 
   // Abrir box de settings (persistencia simple para tema)
   final settingsBox = await Hive.openBox('rexify_settings');
@@ -83,8 +97,24 @@ void main() async {
   runApp(const MyApp());
 }
 
-class MyApp extends StatelessWidget {
+class MyApp extends StatefulWidget {
   const MyApp({super.key});
+
+  @override
+  State<MyApp> createState() => _MyAppState();
+}
+
+class _MyAppState extends State<MyApp> {
+  @override
+  void initState() {
+    super.initState();
+    // Verificación inicial de permisos de almacenamiento (no bloqueante).
+    // Sólo solicita si falta. Evita spam de diálogos en cada arranque.
+    if (Platform.isAndroid) {
+      // Ejecutar en microtask para no interferir con build inicial.
+      Future.microtask(() => PermissionUtils.ensureStoragePermission());
+    }
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -163,6 +193,13 @@ class MyApp extends StatelessWidget {
       theme: lightTheme,        // opcional: tema claro preparado
       darkTheme: darkTheme,     // tema oscuro completo y adaptado
       themeMode: ThemeMode.dark,// fuerza modo oscuro en toda la app
+      locale: const Locale('es'),
+      supportedLocales: const [Locale('es'), Locale('en')],
+      localizationsDelegates: [
+        GlobalMaterialLocalizations.delegate,
+        GlobalWidgetsLocalizations.delegate,
+        GlobalCupertinoLocalizations.delegate,
+      ],
       home: const RootDashboard(),
     );
   }

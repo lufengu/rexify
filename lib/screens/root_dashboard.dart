@@ -9,6 +9,8 @@ import 'youtube_dashboard.dart';
 import 'now_playing_screen.dart';
 import 'settings_screen.dart';
 import '../main.dart';
+import 'download_hub.dart';
+import 'xx_access_gate.dart';
 
 /// Dashboard raíz con navegación inferior.
 /// Abre por defecto en "Reproductor" para cumplir con el flujo solicitado.
@@ -30,7 +32,7 @@ class _RootDashboardState extends State<RootDashboard> {
     super.initState();
     _pages = const [
       YouTubeDashboard(),
-      Y2MateDashboard(),
+      DownloadHub(), // hub multisource (YouTube, Y2Mate, InstaSaved, FDown, SSSTik)
       NowPlayingScreen(),
       DownloadsLibraryScreen(),
       SettingsScreen(),
@@ -53,7 +55,14 @@ class _RootDashboardState extends State<RootDashboard> {
     navChildren.add(
       NavigationBar(
         selectedIndex: _index,
-        onDestinationSelected: (i) => setState(() => _index = i),
+        onDestinationSelected: (i) {
+          if (i == 5) {
+            // Abrir el flujo privado sin cambiar la pestaña seleccionada
+            Navigator.push(context, MaterialPageRoute(builder: (_) => const XXAccessGate()));
+            return;
+          }
+          setState(() => _index = i);
+        },
         destinations: const [
           // YouTube quick access
           NavigationDestination(
@@ -65,6 +74,7 @@ class _RootDashboardState extends State<RootDashboard> {
           NavigationDestination(icon: Icon(Icons.play_circle_fill_rounded), label: 'Reproductor'),
           NavigationDestination(icon: Icon(Icons.library_music_rounded), label: 'Biblioteca'),
           NavigationDestination(icon: Icon(Icons.settings_rounded), label: 'Ajustes'),
+          NavigationDestination(icon: Icon(Icons.lock_rounded), label: 'XX'),
         ],
       ),
     );

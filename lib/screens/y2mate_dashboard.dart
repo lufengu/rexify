@@ -27,7 +27,6 @@ class _Y2MateDashboardState extends State<Y2MateDashboard> {
   InAppWebViewController? _inappController; // controlador avanzado
 
   // Capturas y estado
-  final _capturedCtrl = TextEditingController();
   String _currentPage = '';
   bool _downloading = false;
   int _received = 0;
@@ -58,7 +57,6 @@ class _Y2MateDashboardState extends State<Y2MateDashboard> {
   @override
   void dispose() {
     _player.dispose();
-    _capturedCtrl.dispose();
     super.dispose();
   }
 
@@ -171,9 +169,9 @@ class _Y2MateDashboardState extends State<Y2MateDashboard> {
       final raw = await _inappController?.evaluateJavascript(source: js);
       final value = (raw is String) ? raw : (raw?.toString() ?? '');
       if (value.isNotEmpty) {
-        _capturedCtrl.text = value.trim();
-        setState((){});
-        await DownloadLogger.instance.logJson({'event': 'y2mate_capture_ok', 'value': value});
+        _currentPage = value.trim();
+         setState((){});
+         await DownloadLogger.instance.logJson({'event': 'y2mate_capture_ok', 'value': value});
       } else {
         await DownloadLogger.instance.logJson({'event': 'y2mate_capture_empty'});
         if (mounted) {
@@ -192,16 +190,16 @@ class _Y2MateDashboardState extends State<Y2MateDashboard> {
   }
 
   Future<void> _download({required bool video}) async {
-    final q = _capturedCtrl.text.trim().isEmpty ? _currentPage : _capturedCtrl.text.trim();
-    if (q.isEmpty) return;
-    if (!await _ensureExternalPermission(isVideo: video)) {
-      if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(content: Text('Permiso denegado para guardar en almacenamiento externo.')),
-        );
-      }
-      return;
-    }
+    final q = _currentPage.trim();
+     if (q.isEmpty) return;
+     if (!await _ensureExternalPermission(isVideo: video)) {
+       if (mounted) {
+         ScaffoldMessenger.of(context).showSnackBar(
+           const SnackBar(content: Text('Permiso denegado para guardar en almacenamiento externo.')),
+         );
+       }
+       return;
+     }
     setState(() {
       _downloading = true;
       _received = 0;
@@ -434,47 +432,8 @@ class _Y2MateDashboardState extends State<Y2MateDashboard> {
                 crossAxisAlignment: CrossAxisAlignment.start,
                 mainAxisSize: MainAxisSize.min,
                 children: [
-                  TextField(
-                    controller: _capturedCtrl,
-                    decoration: const InputDecoration(
-                      hintText: 'Enlace / consulta para descargar',
-                      isDense: true,
-                      border: OutlineInputBorder(),
-                    ),
-                    style: const TextStyle(fontSize: 14),
-                  ),
-                  const SizedBox(height: 8),
                   Row(
-                    children: [
-                      Expanded(
-                        child: ElevatedButton.icon(
-                          onPressed: _downloading ? null : () => _download(video: false),
-                          icon: const Icon(Icons.music_note_rounded),
-                          label: const Text('Audio MP3'),
-                        ),
-                      ),
-                      const SizedBox(width: 8),
-                      Expanded(
-                        child: OutlinedButton.icon(
-                          onPressed: _downloading ? null : () => _download(video: true),
-                          icon: const Icon(Icons.videocam_rounded),
-                          label: const Text('Video MP4'),
-                        ),
-                      ),
-                      const SizedBox(width: 8),
-                      Column(
-                        children: [
-                          const Text('Público', style: TextStyle(fontSize: 11)),
-                          Transform.scale(
-                            scale: 0.85,
-                            child: Switch(
-                              value: _savePublic,
-                              onChanged: (v) => setState(() => _savePublic = v),
-                            ),
-                          ),
-                        ],
-                      ),
-                    ],
+                    
                   ),
                   if (_downloading) ...[
                     const SizedBox(height: 8),

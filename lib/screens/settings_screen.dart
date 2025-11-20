@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 import '../services/audio_player_service.dart';
+import 'xx_access_gate.dart';
 
 /// Pantalla de Ajustes (placeholder). Define espacio para futuras opciones:
 /// - Calidad de descarga
@@ -69,6 +70,26 @@ class SettingsScreen extends StatelessWidget {
                 leading: Icon(Icons.color_lens_rounded),
                 title: Text('Color de acento'),
                 subtitle: Text('Morado (Pendiente selector)'),
+              ),
+            ],
+          ),
+          _SectionCard(
+            title: 'Privacidad',
+            children: [
+              ListTile(
+                leading: const Icon(Icons.lock_rounded),
+                title: const Text('Contenido XX (Privado)'),
+                subtitle: const Text('Acceso a Dashboard para adultos con verificación y contraseña'),
+                onTap: () async {
+                  // Navega al Gate que decide en tiempo real
+                  // Evita importar el servicio aquí para mantener desacoplamiento
+                  // y reutilizar el flujo completo.
+                  // ignore: use_build_context_synchronously
+                  Navigator.push(
+                    context,
+                    MaterialPageRoute(builder: (_) => const XXAccessGate()),
+                  );
+                },
               ),
             ],
           ),

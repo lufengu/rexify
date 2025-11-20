@@ -214,4 +214,27 @@ Para añadir más proveedores (ej. SoundCloud, Jamendo):
 - **Gestión de estado reactiva**: Uso extensivo de `StreamBuilder` para actualizar la UI en tiempo real
 - **Material Design 3**: Interfaz moderna siguiendo las últimas guías de diseño de Google
 
+## Permisos de almacenamiento (lógica persistente)
+
+Para mejorar la experiencia del usuario y evitar que la app solicite permisos de almacenamiento en cada inicio, se implementó una lógica nativa + Flutter con estos puntos:
+
+1. Verificación inicial no bloqueante al arrancar (`MyApp.initState`) usando `PermissionUtils.ensureStoragePermission()`.
+2. Canal nativo (`MethodChannel` "rexify/media_store") con método `ensureStoragePermission` que:
+  - Comprueba si el permiso ya está concedido (`hasStoragePermission`).
+  - Si está concedido, devuelve inmediatamente `true`.
+  - Si no, solicita el permiso mostrando un diálogo explicativo (Android 11+ redirige a la pantalla de configuración de "Todos los archivos").
+3. Cache en memoria `_storageGrantedCache` para evitar llamadas redundantes una vez obtenida la aprobación durante la sesión.
+4. Se actualiza un flag en `SharedPreferences` (clave `storage_granted`) a nivel nativo para diagnósticos o futura lógica personalizada.
+5. Los métodos que necesitan permiso (`ensureDownloadPermissions`, `ensureLibraryPermissions`) reutilizan la verificación central.
+
+### Beneficios
+- Menos diálogos intrusivos al usuario.
+- Flujo de arranque más fluido: la UI se muestra de inmediato.
+- Código centralizado para futuras extensiones (ej. manejo diferenciado de permisos de audio, video, imágenes en Android 13+).
+
+### Extensión futura sugerida
+- Agregar pantalla de bienvenida que informe del uso de almacenamiento antes de la primera solicitud.
+- Registrar métricas anónimas de cuántas veces se revocan los permisos para detectar fricción.
+
+
 

@@ -1,7 +1,38 @@
 import 'dart:io';
 import 'package:permission_handler/permission_handler.dart';
+import 'package:flutter/services.dart';
 
 class PermissionUtils {
+  static bool? _storageGrantedCache;
+
+  /// Verificación persistente en memoria: sólo solicita si no está concedido.
+  static Future<bool> ensureStoragePermission() async {
+    if (!Platform.isAndroid) return true;
+    if (_storageGrantedCache == true) return true;
+    final channel = const MethodChannel('rexify/media_store');
+    try {
+      final has = await channel.invokeMethod<bool>('checkStoragePermission');
+      if (has == true) {
+        _storageGrantedCache = true;
+        return true;
+      }
+      final granted = await channel.invokeMethod<bool>('ensureStoragePermission');
+      if (granted == true) {
+        _storageGrantedCache = true;
+        return true;
+      }
+    } catch (_) {
+      // Fallback: permission_handler (para APIs viejas)
+      try {
+        final st = await Permission.storage.request();
+        if (st.isGranted) {
+          _storageGrantedCache = true;
+          return true;
+        }
+      } catch (_) {}
+    }
+    return false;
+  }
   /// Solicita permisos necesarios para descargar/guardar archivos.
   /// publicTarget: si se guardará en almacenamiento público (Descargas/Música) o registrar en MediaStore.
   /// isVideo: orientativo para Android 13+ (permiso de medios específicos al leer, no necesario al escribir via MediaStore).
@@ -26,6 +57,10 @@ class PermissionUtils {
     }
 
     // Para API >= 29: no bloquear si storage es denegado.
+    // API >= 29: usar lógica central de ensureStoragePermission (canal nativo + cache).
+    final ok = await ensureStoragePermission();
+    if (ok) return true;
+
     // Aun así, pedimos permiso de notificaciones para mostrar progreso de flutter_downloader en Android 13+.
     try {
       if ((apiLevel ?? 33) >= 33) {
@@ -79,8 +114,8 @@ class PermissionUtils {
         return audio.isGranted;
       }
       // Para APIs antiguas, pedir almacenamiento
-      final st = await Permission.storage.request();
-      return st.isGranted;
+      final ok = await ensureStoragePermission();
+      return ok;
     } catch (_) {
       return false;
     }
