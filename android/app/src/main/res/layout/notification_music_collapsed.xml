@@ -1,0 +1,137 @@
+<?xml version="1.0" encoding="utf-8"?>
+<RelativeLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    android:id="@+id/root"
+    android:layout_width="match_parent"
+    android:layout_height="wrap_content"
+    android:padding="12dp"
+    android:background="@drawable/bg_music_notification">
+
+    <ImageView
+        android:id="@+id/album_art"
+        android:layout_width="64dp"
+        android:layout_height="64dp"
+        android:scaleType="centerCrop"
+        android:contentDescription="Album art"
+        android:src="@mipmap/ic_launcher" />
+
+    <LinearLayout
+        android:id="@+id/text_container"
+        android:layout_toRightOf="@id/album_art"
+        android:layout_toEndOf="@id/album_art"
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:layout_marginStart="12dp"
+        android:orientation="vertical">
+
+        <TextView
+            android:id="@+id/track_title"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:textColor="@android:color/white"
+            android:textSize="16sp"
+            android:textStyle="bold"
+            android:maxLines="1"
+            android:ellipsize="end"
+            android:text="Título" />
+
+        <TextView
+            android:id="@+id/artist_name"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:textColor="#D1D1D6"
+            android:textSize="12sp"
+            android:maxLines="1"
+            android:ellipsize="end"
+            android:text="Artista" />
+
+        <LinearLayout
+            android:id="@+id/volume_bars"
+            android:layout_width="wrap_content"
+            android:layout_height="32dp"
+            android:layout_marginTop="4dp"
+            android:orientation="horizontal"
+            android:gravity="bottom">
+            <View android:id="@+id/bar1" android:layout_width="3dp" android:layout_height="6dp" android:layout_marginEnd="2dp" android:background="@drawable/vol_bar_shape" />
+            <View android:id="@+id/bar2" android:layout_width="3dp" android:layout_height="10dp" android:layout_marginEnd="2dp" android:background="@drawable/vol_bar_shape" />
+            <View android:id="@+id/bar3" android:layout_width="3dp" android:layout_height="14dp" android:layout_marginEnd="2dp" android:background="@drawable/vol_bar_shape" />
+            <View android:id="@+id/bar4" android:layout_width="3dp" android:layout_height="8dp" android:layout_marginEnd="2dp" android:background="@drawable/vol_bar_shape" />
+            <View android:id="@+id/bar5" android:layout_width="3dp" android:layout_height="12dp" android:layout_marginEnd="2dp" android:background="@drawable/vol_bar_shape" />
+            <View android:id="@+id/bar6" android:layout_width="3dp" android:layout_height="6dp" android:layout_marginEnd="2dp" android:background="@drawable/vol_bar_shape" />
+            <View android:id="@+id/bar7" android:layout_width="3dp" android:layout_height="10dp" android:layout_marginEnd="2dp" android:background="@drawable/vol_bar_shape" />
+            <View android:id="@+id/bar8" android:layout_width="3dp" android:layout_height="8dp" android:background="@drawable/vol_bar_shape" />
+        </LinearLayout>
+    </LinearLayout>
+
+    <LinearLayout
+        android:id="@+id/time_container"
+        android:layout_below="@id/album_art"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:orientation="horizontal"
+        android:layout_marginTop="12dp"
+        android:gravity="center_vertical">
+
+        <TextView
+            android:id="@+id/current_time"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:text="0:00"
+            android:textColor="#8E8E93"
+            android:textSize="11sp" />
+
+        <ProgressBar
+            style="@android:style/Widget.ProgressBar.Horizontal"
+            android:id="@+id/progress_bar"
+            android:layout_width="0dp"
+            android:layout_height="4dp"
+            android:layout_weight="1"
+            android:layout_marginHorizontal="8dp"
+            android:progress="0"
+            android:max="1000"
+            android:progressDrawable="@drawable/progress_drawable" />
+
+        <TextView
+            android:id="@+id/remaining_time"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:text="0:00"
+            android:textColor="#8E8E93"
+            android:textSize="11sp" />
+    </LinearLayout>
+
+    <LinearLayout
+        android:id="@+id/controls_container"
+        android:layout_below="@id/time_container"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:orientation="horizontal"
+        android:gravity="center"
+        android:layout_marginTop="10dp">
+
+        <ImageButton
+            android:id="@+id/btn_prev"
+            android:layout_width="44dp"
+            android:layout_height="44dp"
+            android:background="@android:color/transparent"
+            android:tint="@android:color/white"
+            android:src="@android:drawable/ic_media_previous"
+            android:contentDescription="Prev" />
+        <ImageButton
+            android:id="@+id/btn_play_pause"
+            android:layout_width="52dp"
+            android:layout_height="52dp"
+            android:background="@android:color/transparent"
+            android:tint="@android:color/white"
+            android:src="@android:drawable/ic_media_play"
+            android:contentDescription="Play/Pause" />
+        <ImageButton
+            android:id="@+id/btn_next"
+            android:layout_width="44dp"
+            android:layout_height="44dp"
+            android:background="@android:color/transparent"
+            android:tint="@android:color/white"
+            android:src="@android:drawable/ic_media_next"
+            android:contentDescription="Next" />
+    </LinearLayout>
+
+</RelativeLayout>

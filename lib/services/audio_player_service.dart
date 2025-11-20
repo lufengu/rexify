@@ -2,6 +2,8 @@ import 'dart:io';
 import 'dart:convert';
 import 'dart:typed_data';
 import 'dart:async'; // <-- añadido
+import 'package:flutter/services.dart';
+import 'package:flutter/foundation.dart';
 import 'package:audio_session/audio_session.dart';
 import 'package:just_audio/just_audio.dart';
 import 'package:audio_service/audio_service.dart';
@@ -53,6 +55,37 @@ class AudioPlayerService {
   int get currentFileIndex => _fileIndex;
   List<String> get filePlaylist => List.unmodifiable(_filePlaylist);
 
+  /// Exponer playlist de SongModel pública (solo lectura)
+  List<SongModel> get songPlaylist => List.unmodifiable(_songPlaylist);
+
+  /// Fallback: construir lista de MediaItem desde la playlist interna (sin esperar IO)
+  /// Útil cuando audioHandler.queue está vacío o no disponible.
+  List<MediaItem> get queueSync {
+    if (_songPlaylist.isNotEmpty) {
+      return _songPlaylist.map((s) {
+        return MediaItem(
+          id: s.id.toString(),
+          album: s.album ?? '',
+          title: s.title,
+          artist: s.artist,
+          duration: s.duration != null ? Duration(milliseconds: s.duration!) : null,
+          extras: {'path': s.data},
+        );
+      }).toList(growable: false);
+    }
+    if (_filePlaylist.isNotEmpty) {
+      return _filePlaylist.map((p) {
+        return MediaItem(
+          id: p,
+          album: '',
+          title: p.split(Platform.pathSeparator).last,
+          extras: {'path': p},
+        );
+      }).toList(growable: false);
+    }
+    return const <MediaItem>[];
+  }
+
   Box? _stateBox; // Hive para persistencia de última pista y posición
   DateTime _lastPersist = DateTime.fromMillisecondsSinceEpoch(0);
   Future<void>? _initFuture; // Permite exponer init() público y evitar doble init.
@@ -67,6 +100,38 @@ class AudioPlayerService {
     try {
       final session = await AudioSession.instance;
       await session.configure(const AudioSessionConfiguration.music());
+    } catch (_) {}
+
+    // Registrar canal para recibir acciones nativas enviadas desde NotificationActionReceiver
+    try {
+      const MethodChannel _actionChannel = MethodChannel('rexify/media_actions');
+      _actionChannel.setMethodCallHandler((call) async {
+        if (call.method == 'onMediaAction') {
+          try {
+            final args = call.arguments as Map<dynamic, dynamic>?;
+            final action = args?['action'] as String? ?? '';
+            switch (action) {
+              case 'togglePlayPause':
+                await togglePlayPause();
+                break;
+              case 'playNext':
+                await playNext();
+                break;
+              case 'playPrevious':
+                await playPrevious();
+                break;
+              case 'pause':
+                await pause();
+                break;
+              case 'play':
+                await play();
+                break;
+              default:
+                break;
+            }
+          } catch (_) {}
+        }
+      });
     } catch (_) {}
     // Abrir box Hive para estado persistente
     try { _stateBox = await Hive.openBox('player_state'); } catch (_) {}
@@ -97,17 +162,28 @@ class AudioPlayerService {
       }
     } catch (_) {}
 
-    // Escuchar cambio de posición para persistir (throttle cada 5s)
-    _player.positionStream.listen((pos) {
+    // Escuchar cambio de posición para persistir (throttle cada 5s) y actualizar notificación custom (cada ~2s)
+    DateTime _lastNotif = DateTime.fromMillisecondsSinceEpoch(0);
+    _player.positionStream.listen((pos) async {
       if (_currentPath == null) return;
       if (!_player.playing) return; // guardar sólo mientras reproduce
       final now = DateTime.now();
-      if (now.difference(_lastPersist) < const Duration(seconds: 5)) return;
-      _lastPersist = now;
-      try {
-        _stateBox?.put('last_path', _currentPath);
-        _stateBox?.put('last_position_ms', pos.inMilliseconds);
-      } catch (_) {}
+      // Persistencia
+      if (now.difference(_lastPersist) >= const Duration(seconds: 5)) {
+        _lastPersist = now;
+        try {
+          _stateBox?.put('last_path', _currentPath);
+          _stateBox?.put('last_position_ms', pos.inMilliseconds);
+        } catch (_) {}
+      }
+      // Notificación custom
+      if (now.difference(_lastNotif) >= const Duration(seconds: 2)) {
+        _lastNotif = now;
+        try {
+          final media = await audioHandler.mediaItem.firstWhere((_) => true, orElse: () => null);
+          _sendCustomNotification(media, positionOverride: pos);
+        } catch (_) {}
+      }
     });
 
     // Procesamiento adicional
@@ -190,7 +266,23 @@ class AudioPlayerService {
           artUri: art,
           extras: {'path': path},
         );
-        await audioHandler.updateMediaItem(media);
+  await audioHandler.updateMediaItem(media);
+  _sendCustomNotification(media);
+
+        // PUBLICAR COLA: asegurar que audioHandler.queue refleja la playlist de archivos
+        try {
+          final q = <MediaItem>[];
+          for (final p in _filePlaylist) {
+            q.add(MediaItem(
+              id: p,
+              album: '',
+              title: p.split(Platform.pathSeparator).last,
+              artUri: await _placeholderArtUri(p),
+              extras: {'path': p},
+            ));
+          }
+          await audioHandler.updateQueue(q);
+        } catch (_) {}
       } catch (_) {}
     } catch (e) {
       rethrow;
@@ -202,6 +294,14 @@ class AudioPlayerService {
     if (paths.isEmpty) return;
     _filePlaylist = List.of(paths);
     _fileIndex = startIndex.clamp(0, _filePlaylist.length - 1);
+    // publicar cola de archivos antes de reproducir
+    try {
+      final q = <MediaItem>[];
+      for (final p in _filePlaylist) {
+        q.add(MediaItem(id: p, album: '', title: p.split(Platform.pathSeparator).last, artUri: await _placeholderArtUri(p), extras: {'path': p}));
+      }
+      await audioHandler.updateQueue(q);
+    } catch (_) {}
     await playFile(File(_filePlaylist[_fileIndex]));
   }
 
@@ -227,6 +327,22 @@ class AudioPlayerService {
         ignoreCase: true,
       );
       _originalSongPlaylist = List.from(_songPlaylist);
+      // PUBLICAR COLA en audioHandler para que la UI (NowPlaying/_showQueue) la vea
+      try {
+        final q = <MediaItem>[];
+        for (final s in _songPlaylist) {
+          q.add(MediaItem(
+            id: s.id.toString(),
+            album: s.album ?? '',
+            title: s.title,
+            artist: s.artist,
+            duration: s.duration != null ? Duration(milliseconds: s.duration!) : null,
+            artUri: await _placeholderArtUri('song_${s.id}'),
+            extras: {'path': s.data},
+          ));
+        }
+        await audioHandler.updateQueue(q);
+      } catch (_) {}
       return _songPlaylist;
     } catch (e) {
       // ignore: avoid_print
@@ -271,7 +387,25 @@ class AudioPlayerService {
           artUri: artUri,
           extras: {'path': song.data},
         );
-        await audioHandler.updateMediaItem(media);
+  await audioHandler.updateMediaItem(media);
+  _sendCustomNotification(media);
+
+        // PUBLICAR COLA: playlist basada en SongModel
+        try {
+          final q = <MediaItem>[];
+          for (final s in _songPlaylist) {
+            q.add(MediaItem(
+              id: s.id.toString(),
+              album: s.album ?? '',
+              title: s.title,
+              artist: s.artist,
+              duration: s.duration != null ? Duration(milliseconds: s.duration!) : null,
+              artUri: await _placeholderArtUri('song_${s.id}'),
+              extras: {'path': s.data},
+            ));
+          }
+          await audioHandler.updateQueue(q);
+        } catch (_) {}
       } catch (_) {}
     } catch (e) {
       // ignore: avoid_print
@@ -307,6 +441,11 @@ class AudioPlayerService {
     } else {
       await _player.play();
     }
+    // actualizar notificación al cambiar estado
+    try {
+      final media = await audioHandler.mediaItem.firstWhere((_) => true, orElse: () => null);
+      _sendCustomNotification(media);
+    } catch (_) {}
   }
 
   Future<void> toggleLoopMode() async {
@@ -361,11 +500,27 @@ class AudioPlayerService {
         }
         _songPlaylist = rand;
         _songIndex = 0;
+        // actualizar cola en audioHandler tras barajar
+        try {
+          final q = <MediaItem>[];
+          for (final s in _songPlaylist) {
+            q.add(MediaItem(id: s.id.toString(), album: s.album ?? '', title: s.title, artist: s.artist, duration: s.duration != null ? Duration(milliseconds: s.duration!) : null, artUri: await _placeholderArtUri('song_${s.id}'), extras: {'path': s.data}));
+          }
+          await audioHandler.updateQueue(q);
+        } catch (_) {}
       } else {
         // restaurar orden original ubicando la actual
         final idx = _originalSongPlaylist.indexWhere((s) => s.id == current.id);
         _songPlaylist = List.from(_originalSongPlaylist);
         _songIndex = idx >= 0 ? idx : 0;
+        // actualizar cola al restaurar orden
+        try {
+          final q = <MediaItem>[];
+          for (final s in _songPlaylist) {
+            q.add(MediaItem(id: s.id.toString(), album: s.album ?? '', title: s.title, artist: s.artist, duration: s.duration != null ? Duration(milliseconds: s.duration!) : null, artUri: await _placeholderArtUri('song_${s.id}'), extras: {'path': s.data}));
+          }
+          await audioHandler.updateQueue(q);
+        } catch (_) {}
       }
     }
   }
@@ -396,5 +551,70 @@ class AudioPlayerService {
       await f.writeAsBytes(bytes, flush: true);
       return Uri.file(f.path);
     } catch (_) { return null; }
+  }
+
+  /// Reproduce el ítem de la cola por índice.
+  /// Decide si es una canción (SongModel) o un archivo local y llama al método adecuado.
+  Future<void> playQueueIndex(int index) async {
+    // Si coincide con la playlist de SongModel
+    if (_songPlaylist.isNotEmpty && index >= 0 && index < _songPlaylist.length) {
+      await playSong(_songPlaylist[index], index);
+      return;
+    }
+    // Si coincide con la playlist de archivos
+    if (_filePlaylist.isNotEmpty && index >= 0 && index < _filePlaylist.length) {
+      await playFile(File(_filePlaylist[index]));
+      return;
+    }
+
+    // Intentar leer la cola expuesta por audioHandler y reproducir por 'extras.path' si existe
+    try {
+      final q = await audioHandler.queue.first;
+      if (index >= 0 && index < q.length) {
+        final mi = q[index];
+        final path = mi.extras?['path'] as String?;
+        if (path != null) {
+          // file:// URIs o rutas absolutas
+          if (path.startsWith('file://')) {
+            final fp = Uri.parse(path).toFilePath();
+            await playFile(File(fp));
+            return;
+          }
+          if (path.contains(Platform.pathSeparator) || path.startsWith('/')) {
+            await playFile(File(path));
+            return;
+          }
+        }
+        // Fallback: pedir al audioHandler que salte al índice
+        try { await audioHandler.skipToQueueItem(index); } catch (_) {}
+      }
+    } catch (_) {}
+  }
+
+  // ---------------- Notificación personalizada (canal nativo) ----------------
+  static const MethodChannel _notifChannel = MethodChannel('rexify/custom_notif');
+
+  void _sendCustomNotification(MediaItem? media, {Duration? positionOverride}) {
+    if (kIsWeb) return; // no en web
+    if (!(Platform.isAndroid)) return; // sólo Android
+    final playing = _player.playing;
+    final title = media?.title ?? (currentSong?.title ?? currentPath?.split(Platform.pathSeparator).last ?? '—');
+    final artist = media?.artist ?? currentSong?.artist ?? '';
+    final durationMs = media?.duration?.inMilliseconds ?? _player.duration?.inMilliseconds ?? 0;
+    final pos = positionOverride ?? _player.position;
+    final positionMs = pos.inMilliseconds;
+    String? artworkPath;
+    final artUri = media?.artUri;
+    if (artUri != null && artUri.scheme == 'file') {
+      artworkPath = artUri.toFilePath();
+    }
+    _notifChannel.invokeMethod('update', {
+      'title': title,
+      'artist': artist,
+      'artworkPath': artworkPath,
+      'positionMs': positionMs,
+      'durationMs': durationMs,
+      'playing': playing,
+    }).catchError((_) {});
   }
 }

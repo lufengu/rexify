@@ -29,6 +29,10 @@ class MainActivity : com.ryanheise.audioservice.AudioServiceActivity() {
 
     override fun configureFlutterEngine(flutterEngine: FlutterEngine) {
         super.configureFlutterEngine(flutterEngine)
+        // Inicializar holder para que los receivers nativos puedan enviar eventos a Dart
+        try {
+            FlutterChannelHolder.init(flutterEngine.dartExecutor.binaryMessenger)
+        } catch (_: Exception) { }
         MethodChannel(flutterEngine.dartExecutor.binaryMessenger, CHANNEL).setMethodCallHandler { call, result ->
             when (call.method) {
                 "scanFile" -> {
@@ -124,6 +128,39 @@ class MainActivity : com.ryanheise.audioservice.AudioServiceActivity() {
                         permissionResult = result
                         requestStoragePermission()
                     }
+                }
+                else -> result.notImplemented()
+            }
+        }
+
+        // Canal para notificación personalizada de reproducción
+        MethodChannel(flutterEngine.dartExecutor.binaryMessenger, "rexify/custom_notif").setMethodCallHandler { call, result ->
+            when (call.method) {
+                "update" -> {
+                    val title = call.argument<String>("title")
+                    val artist = call.argument<String>("artist")
+                    val artworkPath = call.argument<String>("artworkPath")
+                    val positionMs = call.argument<Long>("positionMs") ?: 0L
+                    val durationMs = call.argument<Long>("durationMs") ?: 0L
+                    val playing = call.argument<Boolean>("playing") ?: false
+                    try {
+                        MusicNotificationManager.update(
+                            this,
+                            title,
+                            artist,
+                            artworkPath,
+                            positionMs,
+                            durationMs,
+                            playing
+                        )
+                        result.success(true)
+                    } catch (e: Exception) {
+                        result.error("notif_error", e.message, null)
+                    }
+                }
+                "hide" -> {
+                    MusicNotificationManager.hide(this)
+                    result.success(true)
                 }
                 else -> result.notImplemented()
             }

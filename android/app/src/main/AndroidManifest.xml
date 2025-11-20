@@ -67,6 +67,11 @@
                 <action android:name="android.intent.action.MEDIA_BUTTON" />
             </intent-filter>
         </receiver>
+
+        <!-- Receiver nativo para reenviar acciones a Dart -->
+        <receiver android:name="com.example.reproductor_musica.NotificationActionReceiver"
+            android:exported="true">
+        </receiver>
         
         <!-- Don't delete the meta-data below.
              This is used by the Flutter tool to generate GeneratedPluginRegistrant.java -->
